@@ -379,3 +379,51 @@ body.coa-modal-open { overflow: hidden; }
     .coa-modal-actions { flex-wrap: wrap; }
 }
 @media print { .coa-modal, .coa-slot, .coa-bulk-drop { display: none !important; } }
+
+/* --- Synthesis steps on material cards (templates/_synthesis.html, static/js/synthesis.js) --- */
+.syn { padding: 16px 22px 18px; background: #fff; border-top: 1px solid var(--hz-line); }
+.syn-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 8px; }
+.syn-title { font-size: 13px; font-weight: 700; color: var(--hz-navy); }
+.syn-btn { margin: 0; min-height: 34px; padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; line-height: 1.2;
+           background: #fff; color: var(--hz-blue); border: 1px solid var(--hz-border); }
+.syn-btn:hover { background: #f5f8fc; }
+.syn-btn.primary { background: var(--hz-blue); color: #fff; border-color: var(--hz-blue); }
+.syn-btn.primary:hover { background: var(--hz-navy); }
+.syn-btn:disabled { opacity: 0.6; cursor: progress; }
+.syn-btn[hidden] { display: none; }
+.syn-precursors { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0 10px; border-bottom: 1px solid var(--hz-line); }
+.syn-precursors .label { white-space: nowrap; }
+.syn-precursors .value { text-align: right; overflow-wrap: anywhere; }
+.syn-list, .syn-rows { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.syn-list li { display: flex; gap: 10px; align-items: flex-start; }
+.syn-num { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--hz-energy-bg); color: var(--hz-blue);
+           font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.syn-text { min-width: 0; }
+.syn-step { font-size: 14px; font-weight: 600; }
+.syn-cat { font-size: 11.5px; color: var(--hz-muted); }
+.syn-desc { font-size: 13px; color: #4a4f5c; margin-top: 2px; overflow-wrap: anywhere; }
+.syn-empty { margin: 10px 0 0; font-size: 13px; color: var(--hz-muted); }
+.syn-meta { margin-top: 10px; font-size: 11.5px; color: var(--hz-muted); }
+
+/* Editor */
+.syn-editor { display: flex; flex-direction: column; }
+.syn-editor[hidden] { display: none; }
+.syn-label { display: block; margin: 8px 0 0; font-size: 12px; font-weight: 600; color: #444; }
+.syn-precursor-input { margin-top: 6px; }
+.syn-row { display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px dashed #c5cde0; border-radius: 10px; background: #f7f9fd; }
+.syn-row .syn-num { margin-top: 9px; }
+.syn-fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.syn-fields select, .syn-fields input { margin-top: 0; padding: 8px 10px; font-size: 13px; background: #fff; }
+.syn-tools { display: flex; flex-direction: column; gap: 4px; }
+.syn-icon { margin: 0; width: 30px; height: 30px; padding: 0; border-radius: 6px; font-size: 15px; line-height: 1;
+            background: #fff; color: var(--hz-navy); border: 1px solid var(--hz-border); }
+.syn-icon:hover { background: var(--hz-line); }
+.syn-icon:disabled { opacity: 0.35; cursor: default; background: #fff; }
+.syn-icon[data-action="remove"] { color: #c62828; }
+.syn-add { margin: 10px 0 0; min-height: 40px; padding: 8px 12px; border-radius: 10px; font-size: 13px; font-weight: 600;
+           background: #fff; color: var(--hz-blue); border: 1.5px dashed var(--hz-border); }
+.syn-add:hover { border-color: var(--hz-blue); background: #f5f8fc; }
+.syn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.syn-status { font-size: 13px; color: var(--hz-muted); }
+.syn-status.error { color: #c62828; }
+@media print { .syn-btn, .syn-editor { display: none !important; } }

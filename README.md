@@ -15,6 +15,7 @@ BMAC is a full-chain traceability database for battery research labs. It tracks 
 - **Enforces traceability** — every cell links back to its coating, every coating links back to its material
 - **Visualises** the full manufacturing graph interactively, with multi-dimensional filtering and path highlighting
 - **Generates lineage & passport cards** per cell, including EU Battery Regulation DPP scaffold fields 
+- **Records how each material was made**: raw materials and an ordered list of synthesis steps on the material card
 - **Plots cycling data** from BioLogic `.mpr` files: capacity fade, coulombic efficiency, and voltage vs. capacity curves
 - **Exports** any table to CSV or Excel
 
@@ -57,6 +58,13 @@ sudo apt install --no-install-recommends libreoffice-writer   # Word preview (op
 psql "$DATABASE_URL" -f migrations/001_material_coa.sql       # existing databases only
 ```
 Files are stored in `uploads/coa/<material_id>/` (git-ignored, include it in backups). COAs need a login to view.
+
+### Synthesis steps
+Each material card has a **Synthesis steps** section (logged-in users only). **Edit steps** lets you list the raw materials / precursors and add steps in order, each picked from a grouped dropdown (precursor preparation, mixing and size reduction, wet-chemical routes, thermal treatment, atmosphere control, post-synthesis processing, modification and coating, handling and storage) with an optional description such as temperature, time or atmosphere. Steps can be moved up or down and removed; **Save steps** stores the whole list. The step list lives in `services/synthesis.py`, so new steps can be added there without a database change.
+
+```bash
+psql "$DATABASE_URL" -f migrations/002_material_synthesis.sql   # existing databases only
+```
 
 ### Traceability graph
 A full `vis.js` force-directed network of every record and their relationships. Clicking any node highlights its complete upstream (ancestors) and downstream (descendants) path with a pulsing edge animation, and opens a quick-view side panel showing key fields, and QR code.

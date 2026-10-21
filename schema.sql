@@ -115,3 +115,21 @@ CREATE TABLE tbl_material_coa (
     uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_material_coa_material ON tbl_material_coa (material_id, uploaded_at DESC);
+
+-- How a material was made: its raw materials / precursors (one row per material) and an
+-- ordered list of synthesis steps. Step names come from the list in services/synthesis.py,
+-- stored as text so the list can grow without a database change.
+CREATE TABLE tbl_material_synthesis (
+    material_id     TEXT PRIMARY KEY REFERENCES tbl_materials(material_id) ON DELETE CASCADE,
+    precursors      TEXT,
+    updated_by      TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE tbl_material_synthesis_steps (
+    step_id         SERIAL PRIMARY KEY,
+    material_id     TEXT NOT NULL REFERENCES tbl_materials(material_id) ON DELETE CASCADE,
+    step_order      INTEGER NOT NULL CHECK (step_order > 0),
+    step            TEXT NOT NULL,
+    description     TEXT,
+    UNIQUE (material_id, step_order)
+);

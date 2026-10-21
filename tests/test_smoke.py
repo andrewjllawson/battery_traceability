@@ -65,7 +65,7 @@ PAGES = [
 ]
 
 RECORD_PAGES = ["/directory?record_id={id}", "/card/{id}", "/card/{id}/lineage", "/api/card/{id}",
-                "/api/lineage/{id}", "/qr/{id}.png", "/api/graph/{id}"]
+                "/api/lineage/{id}", "/qr/{id}.png", "/api/graph/{id}", "/materials/{id}/synthesis"]
 
 RECORD_TABLES = [("tbl_materials", "material_id"), ("tbl_coating", "coating_id"), ("tbl_slp", "slp_id"),
                  ("tbl_coincell", "coincell_id"), ("tbl_mlp", "mlp_id")]

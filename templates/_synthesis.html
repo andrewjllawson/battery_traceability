@@ -1,0 +1,42 @@
+{#- Synthesis steps section for material cards (card.html).
+    Import with:  {% import "_synthesis.html" as synthesis_ui %}
+    The editor (dropdowns, reorder, save) is in static/js/synthesis.js; styles in hazbat.css;
+    the step list and checks are in services/synthesis.py. -#}
+
+{% macro synthesis_section(material_id, synthesis, catalogue) -%}
+<section class="syn" data-synthesis-material="{{ material_id }}"
+         data-synthesis="{{ synthesis | tojson | forceescape }}"
+         data-synthesis-catalogue="{{ catalogue | tojson | forceescape }}">
+    <div class="syn-head">
+        <span class="syn-title">Synthesis steps</span>
+        <button type="button" class="syn-btn" data-syn-edit>Edit steps</button>
+    </div>
+
+    <div data-syn-view>
+        <div class="syn-precursors">
+            <span class="label">Raw materials</span>
+            <span class="value">{{ synthesis.precursors | dash }}</span>
+        </div>
+        {% if synthesis.steps %}
+        <ol class="syn-list">
+            {% for s in synthesis.steps %}
+            <li>
+                <span class="syn-num">{{ s.order }}</span>
+                <div class="syn-text">
+                    <div class="syn-step">{{ s.step }}</div>
+                    <div class="syn-cat">{{ s.category }}</div>
+                    {% if s.description %}<div class="syn-desc">{{ s.description }}</div>{% endif %}
+                </div>
+            </li>
+            {% endfor %}
+        </ol>
+        {% else %}
+        <p class="syn-empty">No synthesis steps recorded yet. Use <b>Edit steps</b> to add them in order.</p>
+        {% endif %}
+        {% if synthesis.updated_by %}<div class="syn-meta">Last edited by {{ synthesis.updated_by }}</div>{% endif %}
+    </div>
+
+    <div class="syn-editor" data-syn-editor hidden></div>
+</section>
+<script src="/static/js/synthesis.js" defer></script>
+{%- endmacro %}

@@ -8,15 +8,18 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 import base64
+import logging
 
 from core.config import BASE_URL
 from core.db import get_connection
 from core.templates import templates
 from services.coa import latest_coas, public_coa
+from services.synthesis import catalogue, get_synthesis
 from services.cards import card_path, fetch_card_record, make_qr_png, panel_fields
 from services.records import CELL_TYPES, detect_record_type
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/qr/{record_id}.png")
@@ -48,14 +51,22 @@ def view_card(request: Request, record_id: str):
         return HTMLResponse("Record not found.", status_code=404)
 
     # Materials show their newest COA (top-right chip) to logged-in users only
-    coa = None
+    # ...and their synthesis steps, also to logged-in users only (process know-how)
+    coa = synthesis = None
     if record_type == "material" and request.session.get("user_id"):
         coa = public_coa(latest_coas([record_id]).get(record_id))
+        try:
+            synthesis = get_synthesis(record_id)
+        except Exception as e:
+            # Most likely migrations/002_material_synthesis.sql hasn't been run on this database:
+            # show the card without the section rather than failing the whole page.
+            logger.warning("Synthesis steps unavailable for %s: %s", record_id, e)
 
     return templates.TemplateResponse(
         "card.html",
         {"request": request, "record_id": record_id, "record_type": record_type,
-         "record": record, "chain": chain, "qr_base64": qr_base64, "coa": coa}
+         "record": record, "chain": chain, "qr_base64": qr_base64, "coa": coa,
+         "synthesis": synthesis, "synthesis_catalogue": catalogue() if synthesis is not None else None}
     )
 
 
