@@ -270,10 +270,13 @@ def delta_q_curve(cycles):
     top = min(v_early.max(), v_late.max())
     bottom = max(v_early.min(), v_late.min())
     if top <= bottom:
-        raise FeatureError(f"Cycles {EARLY_CYCLE} and {LATE_CYCLE} share no voltage range.")
+        raise FeatureError(
+            f"Cycles {EARLY_CYCLE} and {LATE_CYCLE} share no voltage range."
+        )
     grid = np.linspace(top, bottom, V_POINTS)
-    dq = capacity_on_grid(v_late, q_late, grid) - capacity_on_grid(v_early, q_early, grid)
-    return grid, dq
+    late = capacity_on_grid(v_late, q_late, grid)
+    early = capacity_on_grid(v_early, q_early, grid)
+    return grid, late - early
 
 
 def features_from_cycles(cycles, ir=None, temp=None):
