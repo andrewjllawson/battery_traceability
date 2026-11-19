@@ -14,7 +14,10 @@ from psycopg2 import OperationalError, errors
 from psycopg2.extras import Json
 
 from core.db import get_admin_connection, get_connection
-from services.cycle_features import REDUCED_FEATURES
+from scripts.train_cycle_life import approved_files
+from services.cycle_features import REDUCED_FEATURES, load_fade_cells, save_analysis
+from services.fade_model import score_cells
+from services.model_registry import list_runs, record_run
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -218,3 +221,113 @@ def test_read_only_role_can_read_but_not_write():
         conn.rollback()
         cur.close()
         conn.close()
+
+
+# --- Saving and loading (services/cycle_features.py, services/model_registry.py)
+
+
+@pytest.fixture
+def conn():
+    """A read/write connection rolled back afterwards."""
+    connection = get_connection()
+    yield connection
+    connection.rollback()
+    connection.close()
+
+
+def fake_analysis(n=30, failed=()):
+    summary = []
+    for k in range(1, n + 1):
+        summary.append(
+            {
+                "cycle_no": k,
+                "discharge_mah": 2.0 - 0.002 * k,
+                "charge_mah": 2.02 - 0.002 * k,
+                "coulombic_eff": 0.99,
+                "charge_time_s": 3600.0,
+                "passed_gate": k not in failed,
+            }
+        )
+    return {
+        "summary": summary,
+        "gate": [{"check": "x", "passed": True, "rows_in": n, "rows_out": n}],
+        "features": None,
+        "error": f"Cycle {n + 1} is missing or failed the quality gate.",
+        "n_cycles": n,
+    }
+
+
+def test_save_analysis_replaces_a_files_rows(conn):
+    cur = conn.cursor()
+    cycling_id = insert_file(cur)
+    save_analysis(cycling_id, TEST_RECORD, fake_analysis(30), conn=conn)
+    save_analysis(cycling_id, TEST_RECORD, fake_analysis(20), conn=conn)
+    cur.execute(
+        "SELECT count(*) FROM tbl_cycle_summary WHERE cycling_id = %s", (cycling_id,)
+    )
+    assert cur.fetchone()[0] == 20
+    cur.execute(
+        "SELECT n_cycles, feature_error, gate FROM tbl_cell_features "
+        "WHERE cycling_id = %s",
+        (cycling_id,),
+    )
+    n_cycles, error, gate = cur.fetchone()
+    assert n_cycles == 20 and "Cycle 21" in error
+    assert gate[0]["rows_in"] == 20
+    cur.close()
+
+
+def test_fade_cells_use_gate_passed_cycles_of_the_newest_file(conn):
+    cur = conn.cursor()
+    old_file = insert_file(cur)
+    save_analysis(old_file, TEST_RECORD, fake_analysis(30), conn=conn)
+    new_file = insert_file(cur)
+    save_analysis(new_file, TEST_RECORD, fake_analysis(25, failed={3}), conn=conn)
+    cur.close()
+    cells = load_fade_cells([TEST_RECORD], conn=conn)
+    numbers, capacities = cells[TEST_RECORD]
+    assert len(numbers) == 24 and 3 not in numbers
+    assert capacities[0] == pytest.approx(1.998)
+
+
+def test_registry_round_trip(conn):
+    cycles = list(range(1, 101))
+    capacities = []
+    for k in cycles:
+        capacities.append(2 - 0.002 * k)
+    result = score_cells({TEST_RECORD: (cycles, capacities)})[0]
+    run_id = record_run(result, {"cuts": [0.3]}, "test", "abc123", conn=conn)
+    runs = list_runs("cycling", conn=conn)
+    saved = runs[0]
+    assert saved["run_id"] == run_id
+    assert saved["model"] == result["model"]
+    assert saved["metric"] == pytest.approx(result["metric"])
+    assert saved["r2"] == pytest.approx(result["r2"])
+    assert saved["scatter"] == result["scatter"]
+    assert saved["params"] == {"cuts": [0.3]}
+    assert saved["code_version"] == "abc123"
+
+
+def test_latest_only_keeps_newest_run_per_model(conn):
+    first = record_run(standard_row(), conn=conn)
+    second = record_run(standard_row(), conn=conn)
+    run_ids = []
+    for run in list_runs("test-type", latest_only=True, conn=conn):
+        run_ids.append(run["run_id"])
+    assert run_ids == [second] and first != second
+
+
+def standard_row():
+    return {
+        "data_type": "test-type",
+        "model": "Linear fade",
+        "target": "x",
+        "split_method": "x",
+        "metric_name": "x",
+        "metric": 1.0,
+    }
+
+
+def test_training_only_reads_approved_files(tmp_path):
+    with pytest.raises(ValueError, match="not inside"):
+        approved_files(tmp_path, "*.xlsx")

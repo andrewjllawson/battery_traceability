@@ -129,3 +129,26 @@ def test_run_visibility():
     assert run_visible("LEAP", ["LEAP"])
     assert not run_visible("FAST", ["LEAP"])
     assert run_visible(None, ["LEAP"])  # no project: visible to everyone
+
+
+def test_mixing_result_in_the_shared_shape():
+    from services.model_registry import mixing_to_standard
+
+    result = {
+        "runs": 2,
+        "stages": 6,
+        "seconds": 900,
+        "r2": 0.91,
+        "mae_w": 120.0,
+        "baseline_r2": 0.0,
+        "baseline_mae_w": 600.0,
+        "importance": [{"feature": "Rotor speed", "value": 0.5}],
+        "scatter": {"actual": [1.0], "predicted": [1.1]},
+        "per_run": {},
+    }
+    shared = mixing_to_standard(result)
+    assert shared["data_type"] == "mixing"
+    assert shared["metric"] == 120.0 and shared["baseline_metric"] == 600.0
+    assert shared["n_groups"] == 6 and shared["n_test"] == 900
+    assert shared["n_train"] is None  # leave-one-stage-out has no fixed training set
+    assert shared["importance"] == result["importance"]

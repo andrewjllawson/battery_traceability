@@ -8,11 +8,19 @@ trained on one can score the other.
 
 Units match the Severson data: capacity in Ah, charge time in minutes.
 Cycle N is the N-th full cycle from group_full_cycles(), counting from 1.
+
+analyse_file() and save_analysis() fill tbl_cycle_summary and tbl_cell_features
+(scripts/extract_cycle_features.py); everything above them needs no database.
 """
 
 import numpy as np
 import pandas as pd
+from psycopg2 import sql
+from psycopg2.extras import Json, execute_values
 from scipy.stats import kurtosis, skew
+
+from core.db import get_connection
+from services.cycling import group_full_cycles, read_half_cycles, stored_file
 
 V_POINTS = 1000  # points on the ΔQ(V) voltage grid, as in the paper
 EARLY_CYCLE = 10
@@ -320,3 +328,187 @@ def features_from_severson_cell(cell):
     return early_features(
         q_late - q_early, s["QD"], s["chargetime"], ir=s["IR"], temp=s["Tmax"]
     )
+
+
+# --- Filling the tables --------------------------------------------------------
+
+SUMMARY_COLUMNS = (
+    "cycle_no",
+    "discharge_mah",
+    "charge_mah",
+    "coulombic_eff",
+    "charge_time_s",
+)
+
+
+def analyse_cycles(cycles):
+    """Everything stored for one file, from its full cycles: {"summary": rows
+    with passed_gate, "gate": report, "features": dict or None, "error": why
+    there are no features, or None, "n_cycles"}.
+    """
+    kept, gate = check_cycles(cycles)
+    passed = set()
+    for cycle in kept:
+        passed.add(cycle["cycle"])
+    summary = cycle_summary(cycles)
+    for row in summary:
+        row["passed_gate"] = row["cycle_no"] in passed
+
+    features, error = None, None
+    try:
+        features = features_from_cycles(kept)
+    except FeatureError as e:
+        error = str(e)
+    return {
+        "summary": summary,
+        "gate": gate,
+        "features": features,
+        "error": error,
+        "n_cycles": len(cycles),
+    }
+
+
+def analyse_file(file_path):
+    """analyse_cycles() for a stored .mpr file. A file that cannot be read gives a
+    one-line failed gate and no cycles."""
+    path = stored_file(file_path)
+    try:
+        if path is None:
+            raise ValueError("The stored path is outside the upload folder.")
+        halves = read_half_cycles(path, max_points=None, with_time=True)
+    except Exception as e:  # unreadable, missing, or not a BioLogic file
+        step = gate_step("Readable .mpr file", None, 0, False, str(e))
+        return {
+            "summary": [],
+            "gate": [step],
+            "features": None,
+            "error": f"Could not read the file: {e}",
+            "n_cycles": 0,
+        }
+    analysis = analyse_cycles(group_full_cycles(halves))
+    cycles = analysis["n_cycles"]
+    analysis["gate"].insert(0, gate_step("Readable .mpr file", cycles, cycles, True))
+    return analysis
+
+
+def cycling_files(record_id=None):
+    """(cycling_id, record_id, file_path) of every stored file, or one record's."""
+    query = "SELECT cycling_id, record_id, file_path FROM tbl_cycling_data"
+    values = []
+    if record_id:
+        query += " WHERE record_id = %s"
+        values.append(record_id)
+    conn = get_connection(read_only=True)
+    cur = conn.cursor()
+    cur.execute(query + " ORDER BY cycling_id", values)
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
+
+
+def save_analysis(cycling_id, record_id, analysis, conn=None):
+    """Replace a file's rows in tbl_cycle_summary and tbl_cell_features. Commits,
+    unless conn is given (then the caller commits or rolls back)."""
+    summary_rows = []
+    for row in analysis["summary"]:
+        values = [cycling_id, record_id]
+        for name in SUMMARY_COLUMNS:
+            values.append(row[name])
+        values.append(row["passed_gate"])
+        summary_rows.append(tuple(values))
+
+    features = analysis["features"] or {}
+    feature_values = []
+    for name in REDUCED_FEATURES:
+        feature_values.append(features.get(name))
+    grid = (features.get("v_grid_max"), features.get("v_grid_min"))
+    columns = [
+        "cycling_id",
+        "record_id",
+        "n_cycles",
+        *REDUCED_FEATURES,
+        "v_grid_max",
+        "v_grid_min",
+        "gate",
+        "feature_error",
+    ]
+    values = (
+        cycling_id,
+        record_id,
+        analysis["n_cycles"],
+        *feature_values,
+        *grid,
+        Json(analysis["gate"]),
+        analysis["error"],
+    )
+    updates = []
+    for name in columns[1:]:
+        updates.append(sql.SQL("{0} = EXCLUDED.{0}").format(sql.Identifier(name)))
+    upsert = sql.SQL(
+        "INSERT INTO tbl_cell_features ({}) VALUES ({}) "
+        "ON CONFLICT (cycling_id) DO UPDATE SET {}, computed_at = now()"
+    ).format(
+        sql.SQL(", ").join(sql.Identifier(name) for name in columns),
+        sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+        sql.SQL(", ").join(updates),
+    )
+
+    own = conn is None
+    if own:
+        conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM tbl_cycle_summary WHERE cycling_id = %s", (cycling_id,)
+        )
+        if summary_rows:
+            execute_values(
+                cur,
+                "INSERT INTO tbl_cycle_summary (cycling_id, record_id, cycle_no, "
+                "discharge_mah, charge_mah, coulombic_eff, charge_time_s, "
+                "passed_gate) VALUES %s",
+                summary_rows,
+            )
+        cur.execute(upsert, values)
+        if own:
+            conn.commit()
+    finally:
+        cur.close()
+        if own:
+            conn.close()
+
+
+def load_fade_cells(record_ids=None, conn=None):
+    """Gate-passed discharge capacity of each record's newest file, for the fade
+    model: {record_id: (cycle numbers, capacities in mAh)}. record_ids=None
+    loads every record."""
+    query = (
+        "SELECT s.record_id, s.cycle_no, s.discharge_mah FROM tbl_cycle_summary s "
+        "JOIN (SELECT DISTINCT ON (record_id) record_id, cycling_id "
+        "FROM tbl_cycling_data ORDER BY record_id, uploaded_at DESC, cycling_id DESC)"
+        " newest ON newest.cycling_id = s.cycling_id "
+        "WHERE s.passed_gate"
+    )
+    values = []
+    if record_ids is not None:
+        query += " AND s.record_id = ANY(%s)"
+        values.append(list(record_ids))
+    own = conn is None
+    if own:
+        conn = get_connection(read_only=True)
+    cur = conn.cursor()
+    try:
+        cur.execute(query + " ORDER BY s.record_id, s.cycle_no", values)
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        if own:
+            conn.close()
+
+    cells = {}
+    for record_id, cycle_no, capacity in rows:
+        numbers, capacities = cells.setdefault(record_id, ([], []))
+        numbers.append(cycle_no)
+        capacities.append(capacity)
+    return cells

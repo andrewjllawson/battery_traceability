@@ -19,6 +19,8 @@ from services.cycle_features import (  # noqa: E402
     REDUCED_FEATURES,
     V_POINTS,
     FeatureError,
+    analyse_cycles,
+    analyse_file,
     check_cycles,
     cycle_summary,
     delta_q_curve,
@@ -220,3 +222,34 @@ def test_severson_cell_matches_mpr_path():
     for name in FEATURE_COLUMNS:
         a, b = from_mpr[name], from_severson[name]
         assert math.isclose(a, b, rel_tol=1e-3, abs_tol=1e-9), name
+
+
+# --- What gets stored ----------------------------------------------------------
+
+
+def test_analysis_marks_gate_failures_and_keeps_every_cycle():
+    cycles = make_cycles(n=120)
+    cycles[109]["discharge"]["capacity_mah"][-1] = 10  # efficiency far too low
+    analysis = analyse_cycles(cycles)
+    assert len(analysis["summary"]) == 120
+    failed = []
+    for row in analysis["summary"]:
+        if not row["passed_gate"]:
+            failed.append(row["cycle_no"])
+    assert failed == [110]
+    assert analysis["features"]["fade_slope"] < 0
+    assert analysis["error"] is None
+
+
+def test_analysis_of_a_short_test_gives_the_reason():
+    analysis = analyse_cycles(make_cycles(n=60))
+    assert analysis["features"] is None
+    assert "Cycle 61" in analysis["error"]
+    assert len(analysis["summary"]) == 60
+
+
+def test_file_outside_the_upload_folder_is_not_read():
+    analysis = analyse_file("/etc/passwd")
+    assert analysis["summary"] == []
+    assert not analysis["gate"][0]["passed"]
+    assert "outside the upload folder" in analysis["error"]
