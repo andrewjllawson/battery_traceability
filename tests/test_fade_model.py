@@ -187,3 +187,24 @@ def test_score_cells_skips_short_cells():
     assert score_cells(cells)[0]["n_groups"] == 1
     with pytest.raises(FadeError):
         score_cells({"SHORT": (range(1, 6), [2, 2, 2, 2, 2])})
+
+
+def test_backtest_uses_only_the_early_cycles():
+    """A cell that fades in a straight line, then faster: the early fit does not
+    know about the faster fade, so it forecasts end of life too late."""
+    from services.fade_model import backtest_end_of_life
+
+    q = 2.0 - 0.002 * CYCLES
+    q[100:] -= 0.004 * (CYCLES[100:] - 100)
+    rows = backtest_end_of_life({"CELL": (CYCLES, q)}, fraction=0.5)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fitted_cycles"] == 100
+    assert row["measured"] == 134  # where 2 - 0.002n - 0.004(n - 100) < 1.5984
+    assert row["forecast"] == pytest.approx(200.8, rel=1e-3)  # the early trend
+
+
+def test_backtest_skips_cells_still_above_end_of_life():
+    from services.fade_model import backtest_end_of_life
+
+    assert backtest_end_of_life({"CELL": linear_cell()}) == []

@@ -314,3 +314,42 @@ def standard_result(model, by_cut, actual, predicted, per_cell):
         "note": "Each cell is fitted on its own early cycles; "
         "no cycle after the cut is seen by the fit.",
     }
+
+
+def backtest_end_of_life(cells, fraction=MAIN_CUT):
+    """Forecast each cell from the first part of its test only, for cells that
+    went on to reach end of life, and compare with when they really did.
+
+    cells: {record_id: (cycle_no, capacity_mah)}. Returns one row per cell:
+    {"record_id", "measured", "forecast", "low", "high", "fitted_cycles", "model"}.
+    End of life uses the same early capacity as the full test, so both sides use
+    the same 80% line. Cells that never reach it, or are too short, are left out.
+    """
+    rows = []
+    for record_id, (cycle_no, capacity) in cells.items():
+        n, q = clean_cycles(cycle_no, capacity)
+        if len(n) < MIN_FIT_CYCLES:
+            continue
+        threshold = END_OF_LIFE * float(q[:EARLY_CYCLES].max())
+        below = n[q < threshold]
+        if not len(below):
+            continue
+        k = int(round(len(n) * fraction))
+        # Fit only on cycles before the cell had reached end of life
+        k = min(k, int(np.searchsorted(n, below[0])))
+        try:
+            early = forecast_cell(n[:k], q[:k])
+        except FadeError:
+            continue
+        rows.append(
+            {
+                "record_id": record_id,
+                "measured": float(below[0]),
+                "forecast": early["eol_cycle"],
+                "low": early["eol_low"],
+                "high": early["eol_high"],
+                "fitted_cycles": k,
+                "model": early["model"],
+            }
+        )
+    return rows
