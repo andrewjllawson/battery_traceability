@@ -120,7 +120,9 @@ def test_cycle_rows_go_with_their_file(cur):
     insert_cycle(cur, cycling_id, 1)
     insert_cycle(cur, cycling_id, 2)
     cur.execute("DELETE FROM tbl_cycling_data WHERE cycling_id = %s", (cycling_id,))
-    cur.execute("SELECT count(*) FROM tbl_cycle_summary WHERE record_id = %s", (TEST_RECORD,))
+    cur.execute(
+        "SELECT count(*) FROM tbl_cycle_summary WHERE record_id = %s", (TEST_RECORD,)
+    )
     assert cur.fetchone()[0] == 0
 
 
