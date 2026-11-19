@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Cycling — BMAC{% endblock %}
+{% block content %}
+<style>
+/* Same look as the mixing page (mixing.html), at the default 1000px width */
+.mx-layout { display: flex; gap: 16px; margin-top: 16px; align-items: flex-start; }
+.mx-side {
+    width: 240px; flex-shrink: 0; position: sticky; top: 20px; margin-top: 0;
+    max-height: calc(100vh - 48px); overflow-y: auto;
+}
+.mx-main { flex: 1; min-width: 0; }
+
+.mx-head {
+    font-size: 11px; font-weight: 700; color: #999; letter-spacing: 0.06em;
+    margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center;
+}
+.mx-sep { border: none; border-top: 1px solid #eee; margin: 14px 0; }
+
+/* Cell list */
+.mx-run {
+    display: block; padding: 7px 9px; margin-bottom: 4px; border-radius: 8px;
+    border: 1px solid #dde2ee; text-decoration: none; color: #1a1a2e; font-size: 12px;
+}
+.mx-run:hover { background: #f0f4fb; }
+.mx-run.active { background: #eaf0f8; border-color: #2e5fa3; }
+.mx-run b { display: block; font-size: 13px; color: #1b3a6b; }
+.mx-run span { color: #777; }
+.mx-none { font-size: 12px; color: #777; margin: 0; }
+.mx-note { font-size: 11px; color: #888; margin: 4px 0 0; }
+.mx-side a.mx-link { font-size: 12px; color: var(--hz-blue); font-weight: 600; text-decoration: none; }
+
+/* Summary of the chosen cell, under the list */
+#cyPanel .row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 3px 0; }
+#cyPanel .label { color: #777; }
+#cyPanel .value { font-weight: 600; color: #1a1a2e; text-align: right; }
+#cyPanel .gate-fail { color: #c62828; }
+#cyPanel .gate-pass { color: #2e7d32; }
+
+/* The dark canvas, as on the mixing page and the traceability graph */
+.mx-dark {
+    position: relative; background: #0a0e1a; border-radius: 14px; color: #e8e8f0;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3); padding: 14px 16px 16px; min-height: 560px;
+}
+.mx-tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.mx-tab {
+    margin: 0; padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
+    background: rgba(255,255,255,0.06); color: #9aa6c7; border: 1px solid rgba(255,255,255,0.12);
+}
+.mx-tab:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.mx-tab.active { background: rgba(0,229,255,0.14); color: #00e5ff; border-color: #00e5ff; }
+.mx-view { position: relative; height: 460px; }
+.mx-view[hidden] { display: none; }
+.mx-view canvas { max-width: 100%; }
+.mx-caption { font-size: 12px; color: #9aa6c7; margin: 8px 0 0; }
+.mx-empty {
+    position: absolute; inset: 70px 0 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; color: #9aa6c7; font-size: 15px; padding: 0 40px;
+}
+.mx-empty[hidden] { display: none; }
+.mx-model-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.mx-chip {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: rgba(255,255,255,0.08); color: #e8e8f0; margin: 0 6px 4px 0;
+}
+.mx-chip.good { background: rgba(0,255,157,0.15); color: #00ff9d; }
+.mx-chip.warn { background: rgba(255,184,0,0.15); color: #ffb800; }
+.mx-model-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 260px 220px; gap: 14px; }
+.mx-model-grid .wide { grid-column: 1 / -1; }
+.mx-model-grid > div { position: relative; }
+</style>
+
+<h1 style="margin: 0;">Cycling</h1>
+<p style="margin: 4px 0 0; color: #999; font-size: 14px;">See how a cell's capacity fades, the ΔQ(V) curve behind it, and a forecast of when it reaches end of life</p>
+
+<div class="mx-layout" id="cyclingApp" data-selected="{{ selected or '' }}">
+
+    <!-- The cells with cycling data, and the chosen cell's summary -->
+    <aside class="result mx-side">
+        <div class="mx-head">CELLS</div>
+        {% if cells %}
+        <div id="cyCells">
+            {% for c in cells %}
+            <a class="mx-run" href="/cycling?cell={{ c.record_id }}" data-id="{{ c.record_id }}">
+                <b>{{ c.record_id }}</b>
+                <span>{% if c.extracted %}{{ c.n_cycles }} cycles{% else %}not analysed yet{% endif %} · {{ c.uploaded_at[:10] }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="mx-none">No cycling data yet.</p>
+        {% endif %}
+        <p class="mx-note"><a class="mx-link" href="/cycling/upload">Upload cycling data</a></p>
+
+        <div id="cyPanel" hidden aria-live="polite">
+            <hr class="mx-sep">
+            <div id="cyPanelBody"></div>
+        </div>
+    </aside>
+
+    <!-- Charts: dark canvas like the mixing page -->
+    <div class="mx-main">
+        <div class="mx-dark">
+            <div class="mx-tabs" role="tablist" aria-label="Views">
+                <button type="button" class="mx-tab active" data-view="fade" role="tab">Capacity fade</button>
+                <button type="button" class="mx-tab" data-view="dq" role="tab">ΔQ(V)</button>
+                <button type="button" class="mx-tab" data-view="model" role="tab">Model</button>
+            </div>
+
+            <div class="mx-view" id="view-fade"><canvas id="cFade"></canvas></div>
+            <div class="mx-view" id="view-dq" hidden><canvas id="cDeltaQ"></canvas></div>
+            <div class="mx-view" id="view-model" hidden style="height: auto; min-height: 460px;">
+                <div class="mx-model-bar" id="cyModelStats"></div>
+                <div class="mx-model-grid">
+                    <div class="wide"><canvas id="cForecast"></canvas></div>
+                    <div><canvas id="cModelScatter"></canvas></div>
+                    <div><canvas id="cModelErrors"></canvas></div>
+                </div>
+                <p class="mx-caption" id="cyModelNote"></p>
+            </div>
+
+            <p class="mx-caption" id="cyCaption"></p>
+            <div class="mx-empty" id="cyEmpty">{% if cells %}Choose a cell on the left.{% else %}No cycling data yet. Upload a .mpr file, then run python3 -m scripts.extract_cycle_features --all.{% endif %}</div>
+            <img class="graph-watermark" src="/static/img/wmg-white.png" alt="" aria-hidden="true">
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/cycling.js"></script>
+{% endblock %}

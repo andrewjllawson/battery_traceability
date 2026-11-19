@@ -147,6 +147,8 @@ def run_ids():
         f"/api/cycling/{CELL}/features",
         f"/api/ml/cycle-life/{CELL}",
         "/api/ml/models",
+        f"/api/cycling/{CELL}/delta-q",
+        "/cycling",
     ],
 )
 def test_login_required(url):
@@ -217,6 +219,7 @@ def test_missing_data_is_not_found(client, cells, url):
     [
         (routers.cycling, f"/api/cycling/{CELL}/features"),
         (routers.ml, f"/api/ml/cycle-life/{CELL}"),
+        (routers.cycling, f"/api/cycling/{CELL}/delta-q"),
     ],
 )
 def test_hidden_record_is_not_found(client, cells, monkeypatch, module, url):
@@ -248,3 +251,40 @@ def test_models_list(client, run_ids):
 def test_models_latest_only(client, run_ids):
     runs = client.get(f"/api/ml/models?data_type={TEST_TYPE}&latest=1").json()["runs"]
     assert [run["run_id"] for run in runs] == [run_ids[1]]
+
+
+# --- The cycling page (routers/cycling.py, templates/cycling.html) ---------------
+
+
+def test_cycling_page_lists_cells(client, cells):
+    response = client.get(f"/cycling?cell={CELL}")
+    assert response.status_code == 200
+    assert f'data-id="{CELL}"' in response.text
+    assert f'data-selected="{CELL}"' in response.text
+    assert "not analysed yet" in response.text  # RAW_CELL
+    assert "/static/js/cycling.js" in response.text
+
+
+def test_cycling_page_hides_cells_from_other_projects(client, cells, monkeypatch):
+    def only_others(record_id, allowed):
+        return record_id != CELL
+
+    monkeypatch.setattr(routers.cycling, "record_visible", only_others)
+    response = client.get("/cycling")
+    assert f'data-id="{CELL}"' not in response.text
+    assert f'data-id="{SHORT_CELL}"' in response.text
+
+
+def test_nav_links_to_the_cycling_page(client):
+    assert 'href="/cycling"' in client.get("/mixing").text
+
+
+def test_delta_q_of_an_unreadable_file(client, cells):
+    """The made-up cells have no file on disk, so the curve cannot be read."""
+    response = client.get(f"/api/cycling/{CELL}/delta-q")
+    assert response.status_code == 422
+    assert "Could not read the file" in response.json()["error"]
+
+
+def test_delta_q_of_a_cell_without_data(client):
+    assert client.get("/api/cycling/NO-SUCH-CC9/delta-q").status_code == 404

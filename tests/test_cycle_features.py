@@ -24,6 +24,7 @@ from services.cycle_features import (  # noqa: E402
     check_cycles,
     cycle_summary,
     delta_q_curve,
+    delta_q_for_file,
     features_from_cycles,
     features_from_severson_cell,
 )
@@ -253,3 +254,8 @@ def test_file_outside_the_upload_folder_is_not_read():
     assert analysis["summary"] == []
     assert not analysis["gate"][0]["passed"]
     assert "outside the upload folder" in analysis["error"]
+
+
+def test_delta_q_file_outside_the_upload_folder_is_not_read():
+    with pytest.raises(FeatureError, match="outside the upload folder"):
+        delta_q_for_file("/etc/passwd")

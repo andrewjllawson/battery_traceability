@@ -596,3 +596,55 @@ def stored_analysis(record_id):
         }
     )
     return result
+
+
+def list_cycling_cells():
+    """Every record with a cycling file, newest file first per record: record_id,
+    cycling_id, filename, uploaded_at, n_cycles, extracted and has_features.
+    Callers filter by project (record_visible)."""
+    conn = get_connection(read_only=True)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT DISTINCT ON (d.record_id) d.record_id, d.cycling_id, d.filename, "
+            "d.uploaded_at, f.n_cycles, f.cycling_id IS NOT NULL AS extracted, "
+            "f.cycling_id IS NOT NULL AND f.feature_error IS NULL AS has_features "
+            "FROM tbl_cycling_data d "
+            "LEFT JOIN tbl_cell_features f ON f.cycling_id = d.cycling_id "
+            "ORDER BY d.record_id, d.uploaded_at DESC, d.cycling_id DESC"
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    cells = []
+    for row in rows:
+        cell = dict(row)
+        cell["uploaded_at"] = row["uploaded_at"].isoformat()
+        cells.append(cell)
+    return cells
+
+
+MAX_CURVE_POINTS = 200  # keeps the ΔQ(V) JSON small
+
+
+def delta_q_for_file(file_path):
+    """The ΔQ(V) curve (cycle 100 minus cycle 10) of a stored .mpr file, thinned
+    for a chart: {"voltage_v", "delta_q_mah"}. Raises FeatureError if the file
+    cannot give it."""
+    path = stored_file(file_path)
+    if path is None:
+        raise FeatureError("The stored path is outside the upload folder.")
+    try:
+        halves = read_half_cycles(path, max_points=None)
+    except Exception as e:  # unreadable, missing, or not a BioLogic file
+        raise FeatureError(f"Could not read the file: {e}") from None
+    kept, _ = check_cycles(group_full_cycles(halves))
+    grid, dq = delta_q_curve(kept)
+    pick = np.linspace(0, len(grid) - 1, MAX_CURVE_POINTS).astype(int)
+    return {
+        "early_cycle": EARLY_CYCLE,
+        "late_cycle": LATE_CYCLE,
+        "voltage_v": grid[pick].round(4).tolist(),
+        "delta_q_mah": (1000 * dq[pick]).round(5).tolist(),
+    }

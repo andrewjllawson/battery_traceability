@@ -11,7 +11,12 @@ from psycopg2 import Error as Psycopg2Error
 from core.auth import get_allowed_projects, require_login
 from core.db import get_connection
 from core.templates import templates
-from services.cycle_features import stored_analysis
+from services.cycle_features import (
+    FeatureError,
+    delta_q_for_file,
+    list_cycling_cells,
+    stored_analysis,
+)
 from services.cycling import (
     group_full_cycles,
     latest_cycling_file,
@@ -22,6 +27,27 @@ from services.cycling import (
 from services.records import record_visible
 
 router = APIRouter()
+
+
+# --- Page --------------------------------------------------------------------
+
+
+@router.get("/cycling", response_class=HTMLResponse)
+def cycling_page(request: Request):
+    """The cycling page: pick a cell, see its fade, ΔQ(V) and fade forecast."""
+    redirect = require_login(request)
+    if redirect:
+        return redirect
+    allowed = get_allowed_projects(request)
+    cells = []
+    for cell in list_cycling_cells():
+        if record_visible(cell["record_id"], allowed):
+            cells.append(cell)
+    return templates.TemplateResponse(
+        request,
+        "cycling.html",
+        {"cells": cells, "selected": request.query_params.get("cell")},
+    )
 
 
 # --- Upload ------------------------------------------------------------------
@@ -284,3 +310,25 @@ def cycling_features(request: Request, record_id: str):
         )
         return JSONResponse(analysis, status_code=404)
     return analysis
+
+
+@router.get("/api/cycling/{record_id}/delta-q")
+def cycling_delta_q(request: Request, record_id: str):
+    """The ΔQ(V) curve (cycle 100 minus cycle 10) of the newest file, read from
+    the file itself."""
+    redirect = require_login(request)
+    if redirect:
+        return redirect
+    if not record_visible(record_id, get_allowed_projects(request)):
+        return JSONResponse(
+            {"error": "No cycling data found for this record"}, status_code=404
+        )
+    file_path = latest_cycling_file(record_id)
+    if not file_path:
+        return JSONResponse(
+            {"error": "No cycling data found for this record"}, status_code=404
+        )
+    try:
+        return delta_q_for_file(file_path)
+    except FeatureError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
