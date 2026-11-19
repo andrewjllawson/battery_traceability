@@ -18,6 +18,7 @@ MIN_FIT_CYCLES = 10
 MIN_TEST_CYCLES = 5
 END_OF_LIFE = 0.8  # fraction of early capacity
 EARLY_CYCLES = 10  # early capacity is the best of the first 10 cycles
+MIN_FADE = 0.001  # a fit falling less than 0.1% of early capacity is not fading
 BASELINE_WINDOW = 5  # the baseline holds the median of the last 5 fitted cycles
 MAX_EXTRAPOLATION = 3  # a forecast beyond 3x the last cycle is flagged
 BAND = (10, 90)  # percentiles of the held-out errors: an 80% band
@@ -168,7 +169,11 @@ def forecast_cell(cycle_no, capacity_mah):
 
     reference = float(q[:EARLY_CYCLES].max())
     threshold = END_OF_LIFE * reference
-    eol = end_of_life_cycle(best, params, threshold)
+    # A flat cell's slope is rounding noise, which would put end of life at an
+    # absurd cycle number, so a fit that barely falls counts as not fading
+    fitted_ends = predict_form(best, params, [n[0], n[-1]])
+    fading = fitted_ends[0] - fitted_ends[1] >= MIN_FADE * reference
+    eol = end_of_life_cycle(best, params, threshold) if fading else None
 
     errors = []
     for row in rows:

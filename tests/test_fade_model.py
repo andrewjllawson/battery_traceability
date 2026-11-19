@@ -98,6 +98,15 @@ def test_cell_that_does_not_fade_is_flagged():
     assert result["extrapolated"]
 
 
+def test_exactly_flat_cell_is_not_fading():
+    """Rounding gives a flat cell a tiny negative slope; that must not become an
+    end of life at some absurd cycle number."""
+    result = forecast_cell(CYCLES, np.full(len(CYCLES), 2.0))
+    assert result["eol_cycle"] is None
+    assert result["eol_low"] is None and result["eol_high"] is None
+    assert result["extrapolated"]
+
+
 def test_far_forecast_is_flagged_as_extrapolation():
     n, q = linear_cell(slope=-0.0001)  # 80% at about cycle 4000
     result = forecast_cell(n, q)
