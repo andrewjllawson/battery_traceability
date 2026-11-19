@@ -11,6 +11,7 @@ from psycopg2 import Error as Psycopg2Error
 from core.auth import get_allowed_projects, require_login
 from core.db import get_connection
 from core.templates import templates
+from services.cycle_features import stored_analysis
 from services.cycling import (
     group_full_cycles,
     latest_cycling_file,
@@ -257,3 +258,29 @@ def cycling_half_cycle(request: Request, record_id: str, half_cycle: str):
             status_code=404,
         )
     return JSONResponse(match)
+
+
+@router.get("/api/cycling/{record_id}/features")
+def cycling_features(request: Request, record_id: str):
+    """The newest file's per-cycle summary, quality gate report and early-life
+    features, as stored by scripts/extract_cycle_features.py.
+    """
+    redirect = require_login(request)
+    if redirect:
+        return redirect
+    if not record_visible(record_id, get_allowed_projects(request)):
+        return JSONResponse(
+            {"error": "No cycling data found for this record"}, status_code=404
+        )
+    analysis = stored_analysis(record_id)
+    if analysis is None:
+        return JSONResponse(
+            {"error": "No cycling data found for this record"}, status_code=404
+        )
+    if not analysis["extracted"]:
+        analysis["error"] = (
+            "This file has not been analysed yet "
+            "(python3 -m scripts.extract_cycle_features --record ID)"
+        )
+        return JSONResponse(analysis, status_code=404)
+    return analysis

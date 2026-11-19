@@ -16,7 +16,7 @@ analyse_file() and save_analysis() fill tbl_cycle_summary and tbl_cell_features
 import numpy as np
 import pandas as pd
 from psycopg2 import sql
-from psycopg2.extras import Json, execute_values
+from psycopg2.extras import Json, RealDictCursor, execute_values
 from scipy.stats import kurtosis, skew
 
 from core.db import get_connection
@@ -512,3 +512,87 @@ def load_fade_cells(record_ids=None, conn=None):
         numbers.append(cycle_no)
         capacities.append(capacity)
     return cells
+
+
+def stored_analysis(record_id):
+    """What extract_cycle_features stored for a record's newest file: the file,
+    its gate report, its features and its cycles (one list per column). None if
+    the record has no file; "features" is missing if the file is not extracted.
+    """
+    conn = get_connection(read_only=True)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT cycling_id, filename, uploaded_at FROM tbl_cycling_data "
+            "WHERE record_id = %s ORDER BY uploaded_at DESC, cycling_id DESC LIMIT 1",
+            (record_id,),
+        )
+        newest = cur.fetchone()
+        if newest is None:
+            return None
+        result = {
+            "record_id": record_id,
+            "cycling_id": newest["cycling_id"],
+            "filename": newest["filename"],
+            "uploaded_at": newest["uploaded_at"].isoformat(),
+            "extracted": False,
+        }
+        # Column names come from REDUCED_FEATURES in this file, never from a request
+        columns = [
+            "n_cycles",
+            *REDUCED_FEATURES,
+            "v_grid_max",
+            "v_grid_min",
+            "gate",
+            "feature_error",
+            "computed_at",
+        ]
+        cur.execute(
+            sql.SQL("SELECT {} FROM tbl_cell_features WHERE cycling_id = %s").format(
+                sql.SQL(", ").join(sql.Identifier(name) for name in columns)
+            ),
+            (newest["cycling_id"],),
+        )
+        stored = cur.fetchone()
+        if stored is None:
+            return result
+
+        cur.execute(
+            "SELECT cycle_no, discharge_mah, charge_mah, coulombic_eff, "
+            "charge_time_s, passed_gate FROM tbl_cycle_summary "
+            "WHERE cycling_id = %s ORDER BY cycle_no",
+            (newest["cycling_id"],),
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+    features = None
+    if stored["feature_error"] is None:
+        features = {}
+        for name in REDUCED_FEATURES:
+            features[name] = stored[name]
+    cycles = {}
+    for name in (*SUMMARY_COLUMNS, "passed_gate"):
+        cycles[name] = []
+    for row in rows:
+        for name in cycles:
+            cycles[name].append(row[name])
+    result.update(
+        {
+            "extracted": True,
+            "computed_at": stored["computed_at"].isoformat(),
+            "n_cycles": stored["n_cycles"],
+            "gate": stored["gate"],
+            "features": features,
+            "feature_error": stored["feature_error"],
+            "delta_q_voltage_range_v": [stored["v_grid_max"], stored["v_grid_min"]],
+            "units": {
+                "capacity": "mAh (features: Ah)",
+                "charge_time": "s (features: min)",
+            },
+            "cycles": cycles,
+        }
+    )
+    return result
