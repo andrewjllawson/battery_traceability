@@ -179,13 +179,18 @@ def forecast_cell(cycle_no, capacity_mah):
     for row in rows:
         if row["model"] == best:
             errors.extend(row["errors_pct"])
+    # Errors are (predicted - actual) / actual, so actual = predicted / (1 + error).
+    # Errors of -99% or less would flip the sign, so they are capped.
     low_error, high_error = np.percentile(errors, BAND)
+    over = 1 + max(high_error, -99.0) / 100  # the fit reads this much too high
+    under = 1 + max(low_error, -99.0) / 100  # and this much too low
     eol_early = None
     eol_late = None
     if eol is not None:
-        # A curve that reads low reaches the threshold sooner
-        eol_early = end_of_life_cycle(best, params, threshold / (1 + low_error / 100))
-        eol_late = end_of_life_cycle(best, params, threshold / (1 + high_error / 100))
+        # If the fit reads high, the cell really reaches end of life when the fit
+        # is still above the threshold, so sooner
+        eol_early = end_of_life_cycle(best, params, threshold * over)
+        eol_late = end_of_life_cycle(best, params, threshold * under)
 
     below = n[q < threshold]
     measured = float(below[0]) if len(below) else None
@@ -212,8 +217,8 @@ def forecast_cell(cycle_no, capacity_mah):
         "curve": {
             "cycle": grid.round(1).tolist(),
             "fit": fit.round(5).tolist(),
-            "low": (fit * (1 + low_error / 100)).round(5).tolist(),
-            "high": (fit * (1 + high_error / 100)).round(5).tolist(),
+            "low": (fit / over).round(5).tolist(),
+            "high": (fit / under).round(5).tolist(),
         },
     }
 

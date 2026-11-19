@@ -85,6 +85,18 @@ def test_noise_gives_a_band_around_the_forecast():
     assert result["eol_low"] < result["eol_cycle"] < result["eol_high"]
 
 
+def test_band_points_the_right_way():
+    """Fade that speeds up: fits on early cycles read too high, so the cell is
+    likely to die sooner than the fit says. The band must sit below the fit
+    and its early end before the forecast."""
+    q = 2.0 - 0.002 * CYCLES - 0.00002 * CYCLES**1.5
+    result = forecast_cell(CYCLES, q)
+    fit = np.array(result["curve"]["fit"])
+    assert np.all(np.array(result["curve"]["low"]) <= fit)
+    assert result["eol_low"] < result["eol_cycle"]
+    assert result["eol_high"] <= result["eol_cycle"] * 1.01
+
+
 def test_measured_end_of_life_is_reported():
     n, q = linear_cell(slope=-0.004)  # falls below 80% near cycle 100
     result = forecast_cell(n, q)
