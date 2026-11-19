@@ -9,3 +9,5 @@ test_mpr.py
 local_data.sql
 *.patch
 config/
+data/
+figures/
