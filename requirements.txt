@@ -16,3 +16,4 @@ pyotp>=2.9.0
 cryptography>=42.0.0
 mcp==1.30.0
 scikit-learn>=1.4
+scipy>=1.11  # skew and kurtosis for the cycle features; tested up to 1.18.1

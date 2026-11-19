@@ -15,6 +15,7 @@ import pandas as pd
 from psycopg2.extras import execute_values
 
 from core.db import get_connection
+from services.cycle_features import gate_step
 
 ROTOR_ON_RPM = 100  # above this the rotor counts as running
 MIN_STAGE_S = 5  # shorter blips are ignored
@@ -133,6 +134,63 @@ def find_stages(log: pd.DataFrame) -> pd.DataFrame:
         )
         last_end = end
     return pd.DataFrame(rows, columns=list(STAGE_COLUMNS))
+
+
+def check_mixer_log(data: bytes):
+    """The quality gate behind parse_mixer_xlsx() and find_stages(), step by step,
+    for reporting: [{"check", "passed", "rows_in", "rows_out", "detail"}, ...].
+
+    Runs the same steps as parse_mixer_xlsx() and stops at the first step that
+    rejects the log. The last step counts the seconds inside rotor-on stages,
+    which is what the model uses.
+    """
+    try:
+        sheet = pd.read_excel(io.BytesIO(data), header=0)
+    except Exception as e:  # unreadable, or not a workbook
+        return [gate_step("Readable workbook", None, 0, False, str(e))]
+    rows = len(sheet)
+    report = [gate_step("Readable workbook", rows, rows, True)]
+
+    sheet.columns = [str(c).split(" [")[0].strip() for c in sheet.columns]
+    missing = {"Date", "Time", "RotorRev", "Total Power"} - set(sheet.columns)
+    detail = f"missing: {', '.join(sorted(missing))}" if missing else ""
+    report.append(
+        gate_step("Required columns", rows, 0 if missing else rows, not missing, detail)
+    )
+    if missing:
+        return report
+
+    log = sheet.dropna(subset=["Date", "Time"]).copy()
+    report.append(gate_step("Rows with a timestamp", rows, len(log), len(log) > 0))
+    if not len(log):
+        return report
+
+    stamp = pd.to_datetime(
+        log["Date"].dt.strftime("%Y-%m-%d") + " " + log["Time"].astype(str)
+    )
+    log["t_s"] = (stamp - stamp.iloc[0]).dt.total_seconds().round().astype(int)
+    stamped = len(log)
+    log = log[log["t_s"] > log["t_s"].cummax().shift(fill_value=-1)]
+    report.append(gate_step("Time moves forward", stamped, len(log), len(log) > 0))
+
+    enough = len(log) >= 10
+    report.append(gate_step("At least 10 usable rows", len(log), len(log), enough))
+    if not enough:
+        return report
+
+    _, log = parse_mixer_xlsx(data)
+    stages = find_stages(log)
+    seconds = int(stages["duration_s"].sum()) if len(stages) else 0
+    report.append(
+        gate_step(
+            "Rotor-on stages found",
+            len(log),
+            seconds,
+            len(stages) > 0,
+            f"{len(stages)} stages",
+        )
+    )
+    return report
 
 
 # --- Saving --------------------------------------------------------------------

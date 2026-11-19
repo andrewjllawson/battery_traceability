@@ -16,6 +16,7 @@ VOLTAGE_COLUMNS = (
     "Ecell/V",
     "<Ewe>/V",
 )  # BioLogic names, first one found is used
+TIME_COLUMN = "time/s"
 MAX_POINTS_PER_CURVE = 400  # keeps the JSON small for long files
 
 
@@ -68,15 +69,25 @@ def latest_cycling_file(record_id: str):
     return stored_file(row[0])
 
 
-def read_half_cycles(file_path: str):
+def read_half_cycles(file_path: str, max_points=MAX_POINTS_PER_CURVE, with_time=False):
     """Split a BioLogic file into half-cycles with their voltage curve.
     Returns [{"half_cycle", "is_charge", "capacity_mah": [...],
     "voltage_v": [...]}, ...]; capacity restarts from 0 at the start of each
     half-cycle. Rests (< 0.01 mAh) are dropped.
+
+    max_points=None keeps every point. with_time=True adds "time_s" (seconds
+    from the start of the half-cycle; None if the file has no time column).
     """
     from galvani import BioLogic
 
     data = BioLogic.MPRfile(file_path).data
+    return split_half_cycles(data, max_points, with_time)
+
+
+def split_half_cycles(data, max_points=MAX_POINTS_PER_CURVE, with_time=False):
+    """The work of read_half_cycles() on data already read from a file: a
+    numpy record array, or a dict of arrays keyed by BioLogic column name.
+    """
     names = (
         data.dtype.names
         if hasattr(data, "dtype") and data.dtype.names
@@ -85,6 +96,7 @@ def read_half_cycles(file_path: str):
     v_col = next((c for c in VOLTAGE_COLUMNS if c in names), None)
     if v_col is None:
         raise ValueError("No voltage column (Ewe/V) found in this file")
+    has_time = TIME_COLUMN in names
 
     halves = []
     for c in sorted(set(int(x) for x in data["half cycle"])):
@@ -96,21 +108,28 @@ def read_half_cycles(file_path: str):
         delta = float(q[-1]) - float(q[0])
         if abs(delta) <= 0.01:
             continue  # rest / OCV segment
-        # Keep at most MAX_POINTS_PER_CURVE points, always including the last
-        # one (end capacity)
-        step = max(1, -(-len(q) // MAX_POINTS_PER_CURVE))  # ceiling division
+        # Keep at most max_points points, always including the last one (end
+        # capacity)
+        step = 1
+        if max_points:
+            step = max(1, -(-len(q) // max_points))  # ceiling division
         keep = list(range(0, len(q), step))
         if keep[-1] != len(q) - 1:
             keep.append(len(q) - 1)
         q0 = float(q[0])
-        halves.append(
-            {
-                "half_cycle": c,
-                "is_charge": delta > 0,
-                "capacity_mah": [round(abs(float(q[i]) - q0), 5) for i in keep],
-                "voltage_v": [round(float(v[i]), 4) for i in keep],
-            }
-        )
+        half = {
+            "half_cycle": c,
+            "is_charge": delta > 0,
+            "capacity_mah": [round(abs(float(q[i]) - q0), 5) for i in keep],
+            "voltage_v": [round(float(v[i]), 4) for i in keep],
+        }
+        if with_time:
+            half["time_s"] = None
+            if has_time:
+                t = data[TIME_COLUMN][mask]
+                t0 = float(t[0])
+                half["time_s"] = [round(float(t[i]) - t0, 3) for i in keep]
+        halves.append(half)
     return halves
 
 
@@ -126,6 +145,8 @@ def group_full_cycles(halves):
             "voltage_v": h["voltage_v"],
             "half_cycle": h["half_cycle"],
         }
+        if "time_s" in h:
+            part["time_s"] = h["time_s"]
         if h["is_charge"]:
             cycles.append({"charge": part})
         elif cycles and "discharge" not in cycles[-1]:

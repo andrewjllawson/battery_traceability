@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.mixing import (
     MixingError,
+    check_mixer_log,
     clean_ingredients,
     find_stages,
     parse_mixer_xlsx,
@@ -69,6 +70,36 @@ def test_missing_columns_rejected():
     pd.DataFrame({"a": [1, 2]}).to_excel(buf, index=False)
     with pytest.raises(MixingError):
         parse_mixer_xlsx(buf.getvalue())
+
+
+def test_gate_matches_the_parser():
+    """The gate report follows the rows parse_mixer_xlsx() and find_stages() keep."""
+    rotor = [3500] * 20 + [0] * 10 + [2400] * 30
+    data = make_xlsx(rotor, drop_clock=True)
+    report = check_mixer_log(data)
+    _, log = parse_mixer_xlsx(data)
+    by_name = {step["check"]: step for step in report}
+    assert all(step["passed"] for step in report)
+    assert by_name["Time moves forward"]["rows_in"] == 60
+    assert by_name["Time moves forward"]["rows_out"] == len(log) == 59
+    assert by_name["Rotor-on stages found"]["rows_out"] == 49  # 20 s + 29 s
+    assert by_name["Rotor-on stages found"]["detail"] == "2 stages"
+
+
+def test_gate_stops_at_missing_columns():
+    buf = io.BytesIO()
+    pd.DataFrame({"a": [1, 2]}).to_excel(buf, index=False)
+    report = check_mixer_log(buf.getvalue())
+    assert [step["check"] for step in report] == [
+        "Readable workbook",
+        "Required columns",
+    ]
+    assert not report[-1]["passed"]
+
+
+def test_gate_rejects_a_non_workbook():
+    report = check_mixer_log(b"not a spreadsheet")
+    assert len(report) == 1 and not report[0]["passed"]
 
 
 def test_ingredients_are_cleaned():
