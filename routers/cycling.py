@@ -5,6 +5,7 @@ File reading lives in services/cycling.py. Template: cycling_upload.html.
 """
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from psycopg2 import Error as Psycopg2Error
 
@@ -13,6 +14,7 @@ from core.db import get_connection
 from core.templates import templates
 from services.cycle_features import (
     FeatureError,
+    analyse_and_save,
     delta_q_for_file,
     list_cycling_cells,
     stored_analysis,
@@ -66,8 +68,8 @@ def cycling_upload_form(request: Request):
 async def cycling_upload_submit(
     request: Request, record_id: str = Form(...), file: UploadFile | None = None
 ):
-    """Save the uploaded .mpr file, read its size and cycle count, and log it in
-    tbl_cycling_data.
+    """Save the uploaded .mpr file, read its size and cycle count, log it in
+    tbl_cycling_data, then work out its cycle summary and features.
     """
     file = file or File(...)
     redirect = require_login(request)
@@ -107,7 +109,7 @@ async def cycling_upload_submit(
                 "INSERT INTO tbl_cycling_data "
                 "(record_id, filename, file_path, num_points, max_capacity_mah, "
                 "num_cycles) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
+                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING cycling_id",
                 (
                     record_id,
                     file.filename,
@@ -117,6 +119,7 @@ async def cycling_upload_submit(
                     num_cycles,
                 ),
             )
+            cycling_id = cur.fetchone()[0]
             conn.commit()
             cur.close()
             conn.close()
@@ -124,6 +127,17 @@ async def cycling_upload_submit(
                 f"Uploaded and parsed {num_points} data points for {record_id} "
                 f"({num_cycles} half-cycles)."
             )
+            # The upload is saved by now, so a failed analysis must not undo it
+            try:
+                _, _, result = await run_in_threadpool(
+                    analyse_and_save, cycling_id, record_id, str(save_path)
+                )
+                success += f" Analysis: {result}"
+            except Exception:
+                success += (
+                    " The analysis could not be saved; run python3 -m "
+                    f"scripts.extract_cycle_features --record {record_id}"
+                )
         except Psycopg2Error as e:
             error = f"Failed to parse file: {e!s}"
 

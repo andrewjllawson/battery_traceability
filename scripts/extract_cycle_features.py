@@ -6,7 +6,7 @@
 
 import argparse
 
-from services.cycle_features import analyse_file, cycling_files, save_analysis
+from services.cycle_features import analyse_and_save, cycling_files
 
 
 def main(argv=None):
@@ -21,14 +21,9 @@ def main(argv=None):
         print("No cycling files found.")
         return
     for cycling_id, record_id, file_path in files:
-        analysis = analyse_file(file_path)
-        save_analysis(cycling_id, record_id, analysis)
-        kept = 0
-        for row in analysis["summary"]:
-            kept += row["passed_gate"]
-        result = "features saved" if analysis["features"] else analysis["error"]
+        n_cycles, kept, result = analyse_and_save(cycling_id, record_id, file_path)
         print(
-            f"{record_id} (file {cycling_id}): {analysis['n_cycles']} cycles, "
+            f"{record_id} (file {cycling_id}): {n_cycles} cycles, "
             f"{kept} passed the gate; {result}"
         )
 

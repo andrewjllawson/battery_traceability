@@ -479,6 +479,18 @@ def save_analysis(cycling_id, record_id, analysis, conn=None):
             conn.close()
 
 
+def analyse_and_save(cycling_id, record_id, file_path):
+    """Analyse one stored file and save the result. Returns (number of cycles,
+    number that passed the gate, "features saved" or why there are none)."""
+    analysis = analyse_file(file_path)
+    save_analysis(cycling_id, record_id, analysis)
+    kept = 0
+    for row in analysis["summary"]:
+        kept += row["passed_gate"]
+    result = "features saved" if analysis["features"] else analysis["error"]
+    return analysis["n_cycles"], kept, result
+
+
 def load_fade_cells(record_ids=None, conn=None):
     """Gate-passed discharge capacity of each record's newest file, for the fade
     model: {record_id: (cycle numbers, capacities in mAh)}. record_ids=None
