@@ -18,6 +18,12 @@ VOLTAGE_COLUMNS = (
 )  # BioLogic names, first one found is used
 TIME_COLUMN = "time/s"
 MAX_POINTS_PER_CURVE = 400  # keeps the JSON small for long files
+CAPACITY_COLUMN = "Q charge/discharge/mA.h"
+HALF_CYCLE_COLUMN = "half cycle"
+
+
+class CyclingFileError(ValueError):
+    """An uploaded file cannot be used; the message says why."""
 
 
 def valid_record_id(record_id: str) -> bool:
@@ -67,6 +73,55 @@ def latest_cycling_file(record_id: str):
     if not row:
         return None
     return stored_file(row[0])
+
+
+def read_mpr_stats(file_path: str):
+    """(number of points, largest capacity in mAh, number of half-cycles) of a
+    BioLogic .mpr file. Raises CyclingFileError if the file cannot be used."""
+    from galvani import BioLogic
+
+    try:
+        data = BioLogic.MPRfile(file_path).data
+    except Exception:  # galvani raises many kinds of error for a bad file
+        raise CyclingFileError("Not a readable BioLogic .mpr file.") from None
+    names = (
+        data.dtype.names
+        if hasattr(data, "dtype") and data.dtype.names
+        else list(data.keys())
+    )
+    for column in (CAPACITY_COLUMN, HALF_CYCLE_COLUMN):
+        if column not in names:
+            raise CyclingFileError(f"The file has no '{column}' column.")
+    if len(data) == 0:
+        raise CyclingFileError("The file has no data points.")
+    num_points = len(data)
+    max_capacity = float(data[CAPACITY_COLUMN].max())
+    num_cycles = int(data[HALF_CYCLE_COLUMN].max()) + 1
+    return num_points, max_capacity, num_cycles
+
+
+def store_upload(record_id, filename, temp_path, save_path, stats):
+    """Log a checked upload in tbl_cycling_data and move it from temp_path to
+    save_path. If the insert fails, neither the table nor the files change.
+    stats is read_mpr_stats() of the file. Returns the new cycling_id."""
+    num_points, max_capacity, num_cycles = stats
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO tbl_cycling_data "
+            "(record_id, filename, file_path, num_points, max_capacity_mah, "
+            "num_cycles) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING cycling_id",
+            (record_id, filename, str(save_path), num_points, max_capacity, num_cycles),
+        )
+        cycling_id = cur.fetchone()[0]
+        os.replace(temp_path, save_path)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()  # without a commit, the insert is rolled back
+    return cycling_id
 
 
 def read_half_cycles(file_path: str, max_points=MAX_POINTS_PER_CURVE, with_time=False):

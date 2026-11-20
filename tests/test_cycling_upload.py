@@ -1,9 +1,11 @@
-"""Cycling upload works out the features straight away (routers/cycling.py,
+"""Cycling upload works out the features straight away, and a bad file is turned
+away without touching any stored file (routers/cycling.py, services/cycling.py,
 services/cycle_features.analyse_and_save).
 
 Needs a database with the dev seed (dev / dev login); skipped if none can be
 reached. galvani and the file analysis are replaced by fakes, so no real .mpr is
-needed. Uploaded rows and files are deleted afterwards.
+needed; the bad-file tests use the real galvani on made-up bytes. Uploaded rows
+and files are deleted afterwards.
 
 pytest -q tests/test_cycling_upload.py
 """
@@ -21,10 +23,11 @@ from psycopg2 import OperationalError
 
 import main
 import services.cycle_features
+import services.cycling
 from core.db import get_connection
 from scripts import extract_cycle_features
 from services.cycle_features import REDUCED_FEATURES
-from services.cycling import UPLOAD_DIR
+from services.cycling import UPLOAD_DIR, CyclingFileError, read_mpr_stats
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -33,6 +36,7 @@ os.chdir(ROOT)
 # Contains -CC so detect_record_type sees a coin cell; no tbl_coincell row, so visible
 CELL = "TEST-UP-CC1"
 FILENAME = "fake.mpr"
+REAL_MPR = BioLogic.MPRfile  # kept before the fixture swaps in FakeMPR
 
 
 def database_available() -> bool:
@@ -113,7 +117,8 @@ def clean_up(monkeypatch):
         conn.commit()
         cur.close()
         conn.close()
-        (UPLOAD_DIR / f"{CELL}_{FILENAME}").unlink(missing_ok=True)
+        for path in UPLOAD_DIR.glob(f"{CELL}_*"):
+            path.unlink()
 
 
 def upload(client):
@@ -190,3 +195,139 @@ def test_script_output_unchanged(client, monkeypatch, capsys):
     line = capsys.readouterr().out.strip()
     assert line.startswith(f"{CELL} (file ")
     assert line.endswith("): 2 cycles, 1 passed the gate; features saved")
+
+
+# --- Bad files ---------------------------------------------------------------
+
+GARBAGE = b"this is not a BioLogic file"
+
+
+class NoCapacityMPR:
+    """A file without the capacity column."""
+
+    def __init__(self, path):
+        self.data = pd.DataFrame({"half cycle": [0, 1]})
+
+
+class EmptyMPR:
+    """A file with the right columns but no points."""
+
+    def __init__(self, path):
+        self.data = pd.DataFrame({"Q charge/discharge/mA.h": [], "half cycle": []})
+
+
+def upload_files():
+    """Every file in the upload folder, temporary ones included."""
+    return set(UPLOAD_DIR.iterdir())
+
+
+@pytest.mark.parametrize(
+    "reader, message",
+    [
+        (REAL_MPR, "Not a readable BioLogic .mpr file."),
+        (NoCapacityMPR, "The file has no 'Q charge/discharge/mA.h' column."),
+        (EmptyMPR, "The file has no data points."),
+    ],
+    ids=["garbage", "no-capacity-column", "no-points"],
+)
+def test_read_mpr_stats_rejects(tmp_path, monkeypatch, reader, message):
+    monkeypatch.setattr(BioLogic, "MPRfile", reader)
+    path = tmp_path / "bad.mpr"
+    path.write_bytes(GARBAGE)
+    with pytest.raises(CyclingFileError) as caught:
+        read_mpr_stats(str(path))
+    assert str(caught.value) == message
+
+
+def test_read_mpr_stats_counts():
+    assert read_mpr_stats("unused.mpr") == (4, 2.0, 2)
+
+
+def test_bad_upload_leaves_nothing(client, monkeypatch):
+    monkeypatch.setattr(BioLogic, "MPRfile", REAL_MPR)
+    before = upload_files()
+    response = client.post(
+        "/cycling/upload",
+        data={"record_id": CELL},
+        files={"file": (FILENAME, GARBAGE)},
+    )
+    assert response.status_code == 200
+    assert "Not a readable BioLogic .mpr file." in response.text
+    assert "Uploaded" not in response.text
+    assert upload_files() == before
+    assert stored_rows() == (0, 0, [])
+
+
+def test_bad_reupload_keeps_good_file(client, monkeypatch):
+    monkeypatch.setattr(
+        services.cycle_features, "analyse_file", lambda p: fake_analysis(None)
+    )
+    assert "Uploaded" in upload(client).text
+    saved = UPLOAD_DIR / f"{CELL}_{FILENAME}"
+    good_bytes = saved.read_bytes()
+
+    monkeypatch.setattr(BioLogic, "MPRfile", REAL_MPR)
+    response = client.post(
+        "/cycling/upload",
+        data={"record_id": CELL},
+        files={"file": (FILENAME, GARBAGE)},
+    )
+    assert "Not a readable BioLogic .mpr file." in response.text
+    assert saved.read_bytes() == good_bytes
+    assert stored_rows()[0] == 1
+
+
+class BrokenCursor:
+    def execute(self, *args):
+        raise Psycopg2Error("database went away")
+
+    def close(self):
+        pass
+
+
+class BrokenConnection:
+    def cursor(self):
+        return BrokenCursor()
+
+    def close(self):
+        pass
+
+
+def test_database_error_leaves_no_file(client, monkeypatch):
+    monkeypatch.setattr(services.cycling, "get_connection", BrokenConnection)
+    before = upload_files()
+    response = upload(client)
+    assert "Could not save the upload to the database." in response.text
+    assert upload_files() == before
+    assert stored_rows() == (0, 0, [])
+
+
+def test_file_error_leaves_no_row(client, monkeypatch):
+    def broken_replace(source, target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(services.cycling.os, "replace", broken_replace)
+    before = upload_files()
+    response = upload(client)
+    assert "Could not save the uploaded file." in response.text
+    assert upload_files() == before
+    assert stored_rows() == (0, 0, [])
+
+
+def test_curves_of_unreadable_file_is_422(client, monkeypatch):
+    monkeypatch.setattr(BioLogic, "MPRfile", REAL_MPR)
+    path = UPLOAD_DIR / f"{CELL}_unreadable.mpr"
+    path.write_bytes(GARBAGE)
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO tbl_cycling_data (record_id, filename, file_path) "
+        "VALUES (%s, %s, %s)",
+        (CELL, path.name, str(path)),
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    response = client.get(f"/api/cycling/{CELL}/curves")
+    assert response.status_code == 422
+    assert response.json() == {"error": "Could not read cycling file."}

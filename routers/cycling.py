@@ -4,13 +4,15 @@ voltage curves.
 File reading lives in services/cycling.py. Template: cycling_upload.html.
 """
 
+import tempfile
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from psycopg2 import Error as Psycopg2Error
 
 from core.auth import get_allowed_projects, require_login
-from core.db import get_connection
 from core.templates import templates
 from services.cycle_features import (
     FeatureError,
@@ -20,9 +22,13 @@ from services.cycle_features import (
     stored_analysis,
 )
 from services.cycling import (
+    UPLOAD_DIR,
+    CyclingFileError,
     group_full_cycles,
     latest_cycling_file,
     read_half_cycles,
+    read_mpr_stats,
+    store_upload,
     upload_path,
     valid_record_id,
 )
@@ -90,39 +96,31 @@ async def cycling_upload_submit(
         error = "Record not found."
     else:
         save_path = upload_path(record_id, file.filename)
-
         contents = await file.read()
-        with open(save_path, "wb") as f:
-            f.write(contents)
 
+        # Check a temporary copy first, so a bad file never replaces a good one
+        with tempfile.NamedTemporaryFile(
+            dir=UPLOAD_DIR, suffix=".mpr", delete=False
+        ) as temp:
+            temp.write(contents)
+        temp_path = Path(temp.name)
+        cycling_id = None
         try:
-            from galvani import BioLogic
-
-            mpr = BioLogic.MPRfile(str(save_path))
-            num_points = len(mpr.data)
-            max_capacity = float(mpr.data["Q charge/discharge/mA.h"].max())
-            num_cycles = int(mpr.data["half cycle"].max()) + 1
-
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO tbl_cycling_data "
-                "(record_id, filename, file_path, num_points, max_capacity_mah, "
-                "num_cycles) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING cycling_id",
-                (
-                    record_id,
-                    file.filename,
-                    str(save_path),
-                    num_points,
-                    max_capacity,
-                    num_cycles,
-                ),
+            stats = read_mpr_stats(str(temp_path))
+            cycling_id = store_upload(
+                record_id, file.filename, temp_path, save_path, stats
             )
-            cycling_id = cur.fetchone()[0]
-            conn.commit()
-            cur.close()
-            conn.close()
+        except CyclingFileError as e:
+            error = str(e)
+        except Psycopg2Error:
+            error = "Could not save the upload to the database."
+        except OSError:
+            error = "Could not save the uploaded file."
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        if cycling_id is not None:
+            num_points, _, num_cycles = stats
             success = (
                 f"Uploaded and parsed {num_points} data points for {record_id} "
                 f"({num_cycles} half-cycles)."
@@ -138,8 +136,6 @@ async def cycling_upload_submit(
                     " The analysis could not be saved; run python3 -m "
                     f"scripts.extract_cycle_features --record {record_id}"
                 )
-        except Psycopg2Error as e:
-            error = f"Failed to parse file: {e!s}"
 
     return templates.TemplateResponse(
         request, "cycling_upload.html", {"error": error, "success": success}
@@ -244,10 +240,8 @@ def cycling_curves(request: Request, record_id: str, cycles: str = "1,2"):
         )
     try:
         full = group_full_cycles(read_half_cycles(file_path))
-    except Psycopg2Error as e:
-        return JSONResponse(
-            {"error": f"Could not read cycling file: {e}"}, status_code=422
-        )
+    except Exception:  # unreadable, missing, or not a BioLogic file
+        return JSONResponse({"error": "Could not read cycling file."}, status_code=422)
 
     if cycles == "all":
         wanted = full[:20]
